@@ -3,13 +3,39 @@
 @section('title', 'Absensi - Sistem Absensi')
 
 @section('styles')
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
+    #locationConfirmMap {
+        height: 300px;
+        width: 100%;
+        border-radius: 8px;
+        margin: 15px 0;
+        z-index: 1;
+    }
+    .swal2-popup {
+        max-width: 90% !important;
+        width: 500px !important;
+    }
+    @media (max-width: 640px) {
+        .swal2-popup {
+            width: 95% !important;
+        }
+        #locationConfirmMap {
+            height: 250px;
+        }
+    }
     .attendance-container {
         display: flex;
         justify-content: center;
         align-items: flex-start;
         min-height: 80vh;
         padding: 2rem 1rem;
+    }
+    /* Ensure inputs/textarea don't overflow the card */
+    .form-control,
+    .form-textarea {
+        box-sizing: border-box;
+        max-width: 100%;
     }
     .attendance-wrapper {
         width: 100%;
@@ -363,6 +389,7 @@
 @endsection
 
 @section('scripts')
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
     document.getElementById('image').addEventListener('change', function(e) {
         const file = e.target.files[0];
@@ -399,48 +426,123 @@
         // Request location if WFO
         if (workType === 'WFO') {
             if (navigator.geolocation) {
-                Swal.fire({
-                    title: 'Mengambil Lokasi',
-                    html: '<div style="text-align: center; padding: 12px 0;"><div class="swal2-loader" style="margin: 0 auto 12px;"></div><p style="margin-top: 8px; color: #6b7280; font-size: 14px; margin-bottom: 0;">Mohon izinkan akses lokasi untuk validasi absensi WFO</p></div>',
-                    allowOutsideClick: false,
-                    allowEscapeKey: false,
-                    showConfirmButton: false,
-                    customClass: {
-                        popup: 'swal2-loading-popup',
-                        htmlContainer: 'swal2-loading-html'
-                    }
-                });
-
-                navigator.geolocation.getCurrentPosition(
-                    function(position) {
-                        Swal.close();
-                        submitCheckIn(position.coords.latitude, position.coords.longitude);
-                    },
-                    function(error) {
-                        let errorMessage = 'Tidak dapat mendapatkan lokasi.';
-                        if (error.code === error.PERMISSION_DENIED) {
-                            errorMessage = 'Akses lokasi ditolak. Mohon izinkan akses lokasi untuk absensi WFO.';
-                        } else if (error.code === error.POSITION_UNAVAILABLE) {
-                            errorMessage = 'Informasi lokasi tidak tersedia.';
-                        } else if (error.code === error.TIMEOUT) {
-                            errorMessage = 'Waktu permintaan lokasi habis. Silakan coba lagi.';
+                let retryCount = 0;
+                const maxRetries = 1; // Kurangi retry menjadi 1x saja
+                const startTime = Date.now();
+                
+                console.log('[Geolocation] Mulai request lokasi...');
+                
+                function attemptGetLocation() {
+                    const attemptStartTime = Date.now();
+                    console.log('[Geolocation] Attempt #' + (retryCount + 1) + ' dimulai');
+                    
+                    Swal.fire({
+                        title: 'Mengambil Lokasi',
+                        html: '<div style="text-align: center; padding: 12px 0;"><div class="swal2-loader" style="margin: 0 auto 12px;"></div><p style="margin-top: 8px; color: #6b7280; font-size: 14px; margin-bottom: 0;">Mohon izinkan akses lokasi untuk validasi absensi WFO</p></div>',
+                        allowOutsideClick: false,
+                        allowEscapeKey: false,
+                        showConfirmButton: false,
+                        customClass: {
+                            popup: 'swal2-loading-popup',
+                            htmlContainer: 'swal2-loading-html'
                         }
-                        
-                        Swal.fire({
-                            icon: 'error',
-                            title: 'Gagal Mengambil Lokasi',
-                            text: errorMessage,
-                            confirmButtonColor: '#6366f1',
-                            confirmButtonText: 'OK'
-                        });
-                    },
-                    {
-                        enableHighAccuracy: true,
-                        timeout: 30000,
-                        maximumAge: 0
-                    }
-                );
+                    });
+
+                    const geoOptions = {
+                        enableHighAccuracy: false,
+                        timeout: 10000, // Kurangi menjadi 10 detik
+                        maximumAge: 300000 // Cache 5 menit
+                    };
+                    
+                    console.log('[Geolocation] Options:', geoOptions);
+
+                    navigator.geolocation.getCurrentPosition(
+                        function(position) {
+                            const elapsed = Date.now() - attemptStartTime;
+                            const totalElapsed = Date.now() - startTime;
+                            console.log('[Geolocation] SUCCESS - Lat:', position.coords.latitude, 'Lng:', position.coords.longitude);
+                            console.log('[Geolocation] Accuracy:', position.coords.accuracy, 'meters');
+                            console.log('[Geolocation] Waktu attempt:', elapsed + 'ms');
+                            console.log('[Geolocation] Total waktu:', totalElapsed + 'ms');
+                            
+                            Swal.close();
+                            
+                            // Tampilkan lokasi dulu untuk konfirmasi
+                            showLocationConfirmation(position.coords.latitude, position.coords.longitude, position.coords.accuracy);
+                        },
+                        function(error) {
+                            const elapsed = Date.now() - attemptStartTime;
+                            const totalElapsed = Date.now() - startTime;
+                            
+                            console.error('[Geolocation] ERROR - Code:', error.code);
+                            console.error('[Geolocation] ERROR - Message:', error.message);
+                            console.error('[Geolocation] Waktu attempt:', elapsed + 'ms');
+                            console.error('[Geolocation] Total waktu:', totalElapsed + 'ms');
+                            
+                            retryCount++;
+                            let errorMessage = 'Tidak dapat mendapatkan lokasi.';
+                            let errorCode = '';
+                            
+                            if (error.code === error.PERMISSION_DENIED) {
+                                errorCode = 'PERMISSION_DENIED';
+                                errorMessage = 'Akses lokasi ditolak. Mohon izinkan akses lokasi untuk absensi WFO.';
+                                console.error('[Geolocation] User menolak akses lokasi');
+                                Swal.fire({
+                                    icon: 'error',
+                                    title: 'Akses Lokasi Ditolak',
+                                    text: errorMessage,
+                                    confirmButtonColor: '#6366f1',
+                                    confirmButtonText: 'OK'
+                                });
+                                return;
+                            } else if (error.code === error.POSITION_UNAVAILABLE) {
+                                errorCode = 'POSITION_UNAVAILABLE';
+                                errorMessage = 'Informasi lokasi tidak tersedia.';
+                                console.error('[Geolocation] Lokasi tidak tersedia');
+                            } else if (error.code === error.TIMEOUT) {
+                                errorCode = 'TIMEOUT';
+                                errorMessage = 'Waktu permintaan lokasi habis (' + (elapsed / 1000).toFixed(1) + 's).';
+                                console.error('[Geolocation] Timeout setelah', elapsed + 'ms');
+                                
+                                if (retryCount <= maxRetries) {
+                                    console.log('[Geolocation] Retry attempt #' + (retryCount + 1));
+                                    Swal.close();
+                                    setTimeout(function() {
+                                        attemptGetLocation();
+                                    }, 1000);
+                                    return;
+                                }
+                            }
+                            
+                            console.error('[Geolocation] Final error - Code:', errorCode, 'Retry count:', retryCount);
+                            
+                            // Jika sudah retry maksimal atau error lain, tanya user apakah mau lanjut tanpa lokasi
+                            Swal.fire({
+                                icon: 'warning',
+                                title: 'Gagal Mengambil Lokasi',
+                                html: '<p style="margin-bottom: 8px;">' + errorMessage + '</p><p style="font-size: 12px; color: #9ca3af; margin-bottom: 12px;">Error: ' + errorCode + ' (Waktu: ' + (totalElapsed / 1000).toFixed(1) + 's)</p><p style="font-size: 13px; color: #6b7280;">Lanjutkan check-in tanpa validasi lokasi?</p>',
+                                showCancelButton: true,
+                                confirmButtonColor: '#6366f1',
+                                cancelButtonColor: '#6b7280',
+                                confirmButtonText: 'Ya, Lanjutkan',
+                                cancelButtonText: 'Batal',
+                                reverseButtons: true
+                            }).then((result) => {
+                                if (result.isConfirmed) {
+                                    console.log('[Geolocation] User memilih lanjut tanpa lokasi');
+                                    submitCheckIn(null, null);
+                                } else {
+                                    console.log('[Geolocation] User membatalkan');
+                                }
+                            });
+                        },
+                        geoOptions
+                    );
+                }
+                
+                attemptGetLocation();
             } else {
+                console.error('[Geolocation] Browser tidak mendukung geolocation API');
                 Swal.fire({
                     icon: 'error',
                     title: 'Browser Tidak Mendukung',
@@ -450,11 +552,170 @@
             }
         } else {
             // For WFA and WFH, submit without location
+            console.log('[Geolocation] Work type bukan WFO, skip geolocation');
             submitCheckIn(null, null);
         }
     });
 
-    function submitCheckIn(latitude, longitude) {
+    // Fungsi untuk menghitung jarak (Haversine formula)
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371; // Radius bumi dalam km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = 
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c; // Jarak dalam km
+    }
+
+    // Tampilkan konfirmasi lokasi sebelum check-in
+    function showLocationConfirmation(latitude, longitude, accuracy) {
+        const officeLat = {{ $settings->latitude ?? 'null' }};
+        const officeLng = {{ $settings->longitude ?? 'null' }};
+        const officeRadius = {{ $settings->radius ?? 100 }}; // dalam meter
+        
+        let locationStatus = '';
+        let locationStatusColor = '#059669';
+        let isLocationValid = true;
+        
+        // Validasi lokasi jika office location sudah dikonfigurasi
+        if (officeLat && officeLng && officeRadius) {
+            const distance = calculateDistance(officeLat, officeLng, latitude, longitude);
+            const distanceMeters = distance * 1000;
+            
+            if (distanceMeters > officeRadius) {
+                locationStatus = 'Lokasi Anda berada di luar jangkauan kantor (' + distanceMeters.toFixed(0) + 'm dari kantor, radius: ' + officeRadius + 'm)';
+                locationStatusColor = '#dc2626';
+                isLocationValid = false;
+            } else {
+                locationStatus = 'Lokasi Anda berada dalam jangkauan kantor (' + distanceMeters.toFixed(0) + 'm dari kantor)';
+                locationStatusColor = '#059669';
+                isLocationValid = true;
+            }
+        } else {
+            locationStatus = 'Lokasi kantor belum dikonfigurasi oleh admin';
+            locationStatusColor = '#6b7280';
+            isLocationValid = true; // Default valid jika belum ada konfigurasi
+        }
+        
+        // Tentukan zoom level berdasarkan jarak
+        let zoomLevel = 15;
+        if (officeLat && officeLng) {
+            const distance = calculateDistance(officeLat, officeLng, latitude, longitude);
+            if (distance > 5) zoomLevel = 12;
+            else if (distance > 1) zoomLevel = 13;
+            else if (distance > 0.5) zoomLevel = 14;
+        }
+        
+        // Hitung center point untuk map (antara user dan office jika ada)
+        let centerLat = latitude;
+        let centerLng = longitude;
+        if (officeLat && officeLng) {
+            centerLat = (latitude + officeLat) / 2;
+            centerLng = (longitude + officeLng) / 2;
+            // Adjust zoom untuk menampilkan kedua lokasi
+            const distance = calculateDistance(officeLat, officeLng, latitude, longitude);
+            if (distance > 2) zoomLevel = 12;
+            else if (distance > 1) zoomLevel = 13;
+            else if (distance > 0.5) zoomLevel = 14;
+        }
+        
+        Swal.fire({
+            title: 'Konfirmasi Lokasi',
+            html: `
+                <div style="text-align: left;">
+                    <div id="locationConfirmMap" style="height: 300px; width: 100%; border-radius: 8px; margin: 15px 0;"></div>
+                    <p style="margin-top: 12px; margin-bottom: 8px; font-weight: 600; color: #1f2937;">Status Lokasi:</p>
+                    <p style="color: ${locationStatusColor}; font-size: 14px; font-weight: 500; margin-bottom: 0;">
+                        ${locationStatus}
+                    </p>
+                    <p style="margin-top: 8px; color: #6b7280; font-size: 12px;">
+                        Akurasi: ±${Math.round(accuracy)} meter
+                    </p>
+                </div>
+            `,
+            icon: isLocationValid ? 'info' : 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#6366f1',
+            cancelButtonColor: '#6b7280',
+            confirmButtonText: 'Lanjut Check-In',
+            cancelButtonText: 'Batal',
+            reverseButtons: true,
+            allowOutsideClick: false,
+            allowEscapeKey: true,
+            width: '90%',
+            maxWidth: '500px',
+            didOpen: () => {
+                // Initialize map setelah modal terbuka
+                setTimeout(() => {
+                    const map = L.map('locationConfirmMap').setView([centerLat, centerLng], zoomLevel);
+                    
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    }).addTo(map);
+                    
+                    // Marker untuk lokasi user
+                    const userIcon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div style="background-color:${isLocationValid ? '#10b981' : '#ef4444'}; width:32px; height:32px; border-radius:50%; border:3px solid white; display:flex; align-items:center; justify-content:center; color:white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"><i class="fas fa-user" style="font-size: 16px;"></i></div>`,
+                        iconSize: [32, 32],
+                        iconAnchor: [16, 32],
+                        popupAnchor: [0, -32]
+                    });
+                    
+                    L.marker([latitude, longitude], {icon: userIcon}).addTo(map)
+                        .bindPopup(`<b>Lokasi Anda</b><br>Lat: ${latitude.toFixed(7)}<br>Lng: ${longitude.toFixed(7)}`)
+                        .openPopup();
+                    
+                    // Marker dan circle untuk lokasi kantor (jika ada)
+                    if (officeLat && officeLng && officeRadius) {
+                        // Circle untuk radius kantor
+                        L.circle([officeLat, officeLng], {
+                            radius: officeRadius,
+                            color: '#667eea',
+                            fillColor: '#667eea',
+                            fillOpacity: 0.2,
+                            weight: 2
+                        }).addTo(map);
+                        
+                        // Marker untuk lokasi kantor
+                        const officeIcon = L.divIcon({
+                            className: 'custom-div-icon',
+                            html: `<div style="background-color:#667eea; width:32px; height:32px; border-radius:50%; border:3px solid white; display:flex; align-items:center; justify-content:center; color:white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"><i class="fas fa-building" style="font-size: 16px;"></i></div>`,
+                            iconSize: [32, 32],
+                            iconAnchor: [16, 32],
+                            popupAnchor: [0, -32]
+                        });
+                        
+                        L.marker([officeLat, officeLng], {icon: officeIcon}).addTo(map)
+                            .bindPopup(`<b>Lokasi Kantor</b><br>Radius: ${officeRadius}m`);
+                        
+                        // Fit bounds untuk menampilkan kedua lokasi
+                        const group = new L.featureGroup([
+                            L.marker([latitude, longitude]),
+                            L.marker([officeLat, officeLng])
+                        ]);
+                        map.fitBounds(group.getBounds().pad(0.2));
+                    }
+                    
+                    // Recalculate map size setelah modal terbuka
+                    map.invalidateSize();
+                }, 100);
+            }
+        }).then((result) => {
+            if (result.isConfirmed) {
+                // Lanjut check-in
+                submitCheckIn(latitude, longitude, isLocationValid);
+            } else {
+                // User cancel, tidak ada yang terjadi
+                console.log('[Geolocation] User membatalkan check-in setelah melihat lokasi');
+            }
+        });
+    }
+
+    function submitCheckIn(latitude, longitude, locationValid = true) {
         const formData = new FormData();
         formData.append('work_type', document.getElementById('work_type').value);
         formData.append('notes', document.getElementById('notes').value);
@@ -471,8 +732,9 @@
 
         Swal.fire({
             title: 'Memproses...',
-            text: 'Mohon tunggu',
+            html: '<div style="display: flex; justify-content: center; align-items: center; padding: 20px 0;"><div class="swal2-loader"></div></div>',
             allowOutsideClick: false,
+            showConfirmButton: false,
             didOpen: () => {
                 Swal.showLoading();
             }
@@ -488,10 +750,11 @@
             let title = 'Berhasil!';
             let text = response.data.message;
             
-            // Show warning if location is invalid
-            if (response.data.location_valid === false) {
+            // Show warning if location is invalid (dari server atau dari frontend)
+            if (response.data.location_valid === false || locationValid === false) {
                 icon = 'warning';
                 title = 'Peringatan!';
+                text = 'Check-in berhasil! Namun lokasi Anda berada di luar jangkauan kantor. Hubungi admin jika Anda merasa salah.';
             }
             
             Swal.fire({
@@ -542,8 +805,9 @@
             if (result.isConfirmed) {
                 Swal.fire({
                     title: 'Memproses...',
-                    text: 'Mohon tunggu',
+                    html: '<div style="display: flex; justify-content: center; align-items: center; padding: 20px 0;"><div class="swal2-loader"></div></div>',
                     allowOutsideClick: false,
+                    showConfirmButton: false,
                     didOpen: () => {
                         Swal.showLoading();
                     }

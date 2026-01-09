@@ -15,6 +15,7 @@
     .change-password-wrapper {
         width: 100%;
         max-width: 32rem;
+        box-sizing: border-box;
     }
     
     .card-main {
@@ -23,6 +24,12 @@
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         border: 1px solid #e5e7eb;
         overflow: hidden;
+        box-sizing: border-box;
+    }
+    
+    .card-body {
+        box-sizing: border-box;
+        overflow-x: hidden;
     }
     
     .card-header {
@@ -68,11 +75,13 @@
     
     .form-control {
         width: 100%;
+        max-width: 100%;
         padding: 0.625rem 1rem;
         border: 1px solid #d1d5db;
         border-radius: 0.5rem;
         font-size: 0.875rem;
         transition: all 0.2s;
+        box-sizing: border-box;
     }
     
     .form-control:focus {
